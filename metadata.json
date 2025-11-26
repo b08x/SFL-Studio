@@ -1,0 +1,7 @@
+{
+  "name": "SFL Studio",
+  "description": "A specialized Technical IDE for Prompt Engineering based on the Systemic Functional Linguistics (SFL) framework.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
