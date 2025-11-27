@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, X, Maximize2, Minimize2, Activity, MessageSquare, Terminal, ChevronDown, Radio } from 'lucide-react';
+import { Mic, MicOff, X, Maximize2, Minimize2, Activity, GripHorizontal } from 'lucide-react';
 import { connectLiveAssistant } from '../services/orchestrator';
 import { pcmEncode, base64Encode, base64Decode, pcmToAudioBuffer } from '../services/audioUtils';
 import { UserSettings } from '../types';
@@ -31,6 +31,11 @@ const LiveAssistant: React.FC<LiveAssistantProps> = ({ settings, context, onTool
     const [isMuted, setIsMuted] = useState(false);
     const [transcripts, setTranscripts] = useState<TranscriptItem[]>([]);
     
+    // Positioning State - Default to bottom LEFT to avoid Sidebar on right
+    const [position, setPosition] = useState({ x: 24, y: window.innerHeight - 550 });
+    const [isDragging, setIsDragging] = useState(false);
+    const dragOffset = useRef({ x: 0, y: 0 });
+
     // Refs for Audio & Session
     const sessionRef = useRef<any>(null);
     const inputContextRef = useRef<AudioContext | null>(null);
@@ -39,6 +44,14 @@ const LiveAssistant: React.FC<LiveAssistantProps> = ({ settings, context, onTool
     const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
     const sourceStreamRef = useRef<MediaStream | null>(null);
     const transcriptEndRef = useRef<HTMLDivElement>(null);
+    
+    // Ref for Tool Call to avoid stale closures
+    const latestOnToolCall = useRef(onToolCall);
+
+    // Update the ref whenever the prop changes so the session always calls the fresh function
+    useEffect(() => {
+        latestOnToolCall.current = onToolCall;
+    }, [onToolCall]);
 
     // Auto-scroll transcript
     useEffect(() => {
@@ -51,6 +64,38 @@ const LiveAssistant: React.FC<LiveAssistantProps> = ({ settings, context, onTool
             disconnect();
         };
     }, []);
+
+    // Draggable Logic
+    const handleMouseDown = (e: React.MouseEvent) => {
+        if (e.target instanceof HTMLButtonElement || (e.target as HTMLElement).closest('button')) return;
+        setIsDragging(true);
+        dragOffset.current = {
+            x: e.clientX - position.x,
+            y: e.clientY - position.y
+        };
+    };
+
+    useEffect(() => {
+        const handleMouseMove = (e: MouseEvent) => {
+            if (isDragging) {
+                setPosition({
+                    x: e.clientX - dragOffset.current.x,
+                    y: e.clientY - dragOffset.current.y
+                });
+            }
+        };
+        const handleMouseUp = () => setIsDragging(false);
+
+        if (isDragging) {
+            window.addEventListener('mousemove', handleMouseMove);
+            window.addEventListener('mouseup', handleMouseUp);
+        }
+        return () => {
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mouseup', handleMouseUp);
+        };
+    }, [isDragging]);
+
 
     const initializeAudioInput = async () => {
         try {
@@ -163,18 +208,26 @@ const LiveAssistant: React.FC<LiveAssistantProps> = ({ settings, context, onTool
                     onAudioData: playAudioChunk,
                     onInterrupted: handleInterruption,
                     onTranscript: (role, text) => {
+                         if (!text) return;
                          setTranscripts(prev => {
-                             // Simple deduping/update logic could go here, for now appending
                              const last = prev[prev.length - 1];
-                             if (last && last.role === role && !last.text.endsWith('\n')) {
-                                 // Could merge chunks if we wanted streaming text update logic
-                                 // But here we just append logic for simplicity
+                             // Aggregate logic: Check if the last message matches the role
+                             if (last && last.role === role) {
+                                 const updated = [...prev];
+                                 updated[updated.length - 1] = {
+                                     ...last,
+                                     text: last.text + text
+                                 };
+                                 return updated;
                              }
+                             // Otherwise start a new bubble
                              return [...prev, { id: Date.now().toString(), role, text, timestamp: Date.now() }];
                          });
                     },
                     onToolCall: async (name, args) => {
-                        return await onToolCall(name, args);
+                        // Use the REF here to ensure we get the latest function from the React component
+                        // regardless of when the session was initialized.
+                        return await latestOnToolCall.current(name, args);
                     }
                 }
             );
@@ -217,7 +270,7 @@ const LiveAssistant: React.FC<LiveAssistantProps> = ({ settings, context, onTool
         return (
             <button
                 onClick={connect}
-                className="fixed bottom-6 right-6 w-14 h-14 bg-gradient-to-br from-primary-600 to-indigo-600 rounded-full shadow-2xl flex items-center justify-center hover:scale-110 transition-transform z-50 group border border-white/10"
+                className="fixed bottom-6 left-6 w-14 h-14 bg-gradient-to-br from-primary-600 to-indigo-600 rounded-full shadow-2xl flex items-center justify-center hover:scale-110 transition-transform z-50 group border border-white/10"
                 title="Start SFL-OS Live Assistant"
             >
                 <div className="absolute inset-0 bg-primary-400 rounded-full opacity-0 group-hover:animate-ping"></div>
@@ -228,19 +281,30 @@ const LiveAssistant: React.FC<LiveAssistantProps> = ({ settings, context, onTool
 
     // 2. Expanded/Active State (Panel)
     return (
-        <div className={`fixed bottom-6 right-6 w-96 bg-slate-950/95 backdrop-blur-xl border border-slate-700/50 rounded-2xl shadow-2xl z-50 flex flex-col transition-all duration-300 ${isOpen ? 'h-[500px] opacity-100 translate-y-0' : 'h-14 w-14 opacity-0 translate-y-10 pointer-events-none'}`}>
+        <div 
+            className={`fixed w-96 bg-slate-950/95 backdrop-blur-xl border border-slate-700/50 rounded-2xl shadow-2xl z-50 flex flex-col transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+            style={{ 
+                left: position.x, 
+                top: position.y,
+                height: isOpen ? '500px' : '0px'
+            }}
+        >
             
-            {/* Header */}
-            <div className="h-14 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-900/50 rounded-t-2xl">
+            {/* Header (Draggable) */}
+            <div 
+                className="h-14 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-900/50 rounded-t-2xl cursor-move active:cursor-grabbing select-none"
+                onMouseDown={handleMouseDown}
+            >
                 <div className="flex items-center gap-3">
+                    <GripHorizontal className="w-4 h-4 text-slate-600" />
                     <div className={`w-2.5 h-2.5 rounded-full ${status === 'connected' ? 'bg-emerald-500 animate-pulse' : status === 'connecting' ? 'bg-amber-500 animate-spin' : 'bg-red-500'}`}></div>
                     <span className="font-display font-bold text-slate-200">SFL-OS Live</span>
                 </div>
                 <div className="flex items-center gap-1">
-                    <button onClick={() => setIsOpen(false)} className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800">
+                    <button onClick={() => setIsOpen(false)} className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800" title="Minimize (Keep Listening)">
                         <Minimize2 className="w-4 h-4" />
                     </button>
-                    <button onClick={disconnect} className="p-2 text-red-400 hover:text-red-300 rounded-lg hover:bg-red-900/20">
+                    <button onClick={disconnect} className="p-2 text-red-400 hover:text-red-300 rounded-lg hover:bg-red-900/20" title="Disconnect">
                         <X className="w-4 h-4" />
                     </button>
                 </div>
@@ -249,7 +313,7 @@ const LiveAssistant: React.FC<LiveAssistantProps> = ({ settings, context, onTool
             {/* Transcript Area */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 {transcripts.length === 0 && (
-                    <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-2">
+                    <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-2 select-none pointer-events-none">
                         <Activity className="w-8 h-8 opacity-50" />
                         <p className="text-xs">Listening for commands...</p>
                         <p className="text-[10px] text-slate-700 max-w-[200px] text-center">Try "Change tone to sarcastic" or "Rewrite the prompt"</p>
@@ -257,7 +321,7 @@ const LiveAssistant: React.FC<LiveAssistantProps> = ({ settings, context, onTool
                 )}
                 {transcripts.map((t) => (
                     <div key={t.id} className={`flex ${t.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[85%] rounded-xl p-3 text-sm ${
+                        <div className={`max-w-[85%] rounded-xl p-3 text-sm whitespace-pre-wrap leading-relaxed ${
                             t.role === 'user' 
                             ? 'bg-indigo-600 text-white rounded-tr-none' 
                             : 'bg-slate-800 text-slate-200 rounded-tl-none border border-slate-700'

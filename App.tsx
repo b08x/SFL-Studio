@@ -145,19 +145,34 @@ const App: React.FC = () => {
     return newPrompt;
   };
 
-  const handleUpdateSFL = (category: 'field'|'tenor'|'mode', key: string, value: string) => {
+  const handleUpdateSFL = (category: string, key: string, value: string) => {
       if (!currentPrompt) return;
-      const updated = { ...currentPrompt };
-      // @ts-ignore
-      updated.sfl[category][key] = value;
+      
+      const cat = category.toLowerCase() as 'field' | 'tenor' | 'mode';
+      if (!['field', 'tenor', 'mode'].includes(cat)) return;
+
+      // Immutable update pattern to ensure React re-renders
+      const updated: Prompt = {
+          ...currentPrompt,
+          sfl: {
+              ...currentPrompt.sfl,
+              [cat]: {
+                  ...currentPrompt.sfl[cat],
+                  [key]: value
+              }
+          },
+          updatedAt: Date.now()
+      };
+      
       setCurrentPrompt(updated);
+      db.prompts.save(updated); // Persist immediately for voice commands
 
       // Zod Validation
-      const errorKey = `${category}.${key}`;
+      const errorKey = `${cat}.${key}`;
       try {
-        if (category === 'field') SFLFieldSchema.shape[key as keyof typeof SFLFieldSchema.shape].parse(value);
-        else if (category === 'tenor') SFLTenorSchema.shape[key as keyof typeof SFLTenorSchema.shape].parse(value);
-        else if (category === 'mode') SFLModeSchema.shape[key as keyof typeof SFLModeSchema.shape].parse(value);
+        if (cat === 'field') SFLFieldSchema.shape[key as keyof typeof SFLFieldSchema.shape].parse(value);
+        else if (cat === 'tenor') SFLTenorSchema.shape[key as keyof typeof SFLTenorSchema.shape].parse(value);
+        else if (cat === 'mode') SFLModeSchema.shape[key as keyof typeof SFLModeSchema.shape].parse(value);
 
         setValidationErrors(prev => {
             const newErrors = { ...prev };
@@ -235,7 +250,9 @@ const App: React.FC = () => {
       
       if (name === 'replacePromptContent') {
           if (!currentPrompt) return "No active prompt.";
-          setCurrentPrompt({ ...currentPrompt, content: args.content });
+          const updated = { ...currentPrompt, content: args.content, updatedAt: Date.now() };
+          setCurrentPrompt(updated);
+          db.prompts.save(updated);
           return "Prompt content updated.";
       }
 
