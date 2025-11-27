@@ -2,24 +2,28 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
-import { Prompt, Workflow, UserSettings } from '../types';
+import { Prompt, Workflow, UserSettings, AIProvider } from '../types';
 
 const STORAGE_KEYS = {
   PROMPTS: 'sfl_prompts_v2',
   WORKFLOWS: 'sfl_workflows_v2',
-  SETTINGS: 'sfl_settings_v2'
+  SETTINGS: 'sfl_settings_v3' // Bumped version for new schema
 };
 
 const DEFAULT_SETTINGS: UserSettings = {
+    apiKeys: {},
+    useSearchGrounding: false,
     live: {
         voice: 'Zephyr',
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
         quality: 'standard'
     },
     generation: {
+        provider: AIProvider.GOOGLE,
         model: 'gemini-2.5-flash'
     },
     analysis: {
+        provider: AIProvider.GOOGLE,
         model: 'gemini-3-pro-preview'
     }
 };
@@ -98,7 +102,12 @@ export const db = {
   settings: {
       get: (): UserSettings => {
           const data = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-          return data ? { ...DEFAULT_SETTINGS, ...JSON.parse(data) } : DEFAULT_SETTINGS;
+          if (data) {
+              const parsed = JSON.parse(data);
+              // Migration helper for older versions
+              return { ...DEFAULT_SETTINGS, ...parsed, apiKeys: { ...DEFAULT_SETTINGS.apiKeys, ...parsed.apiKeys } };
+          }
+          return DEFAULT_SETTINGS;
       },
       save: (settings: UserSettings) => {
           localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));

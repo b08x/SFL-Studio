@@ -65,16 +65,30 @@ export interface PromptVersion {
   changeDescription?: string;
 }
 
+export enum AIProvider {
+  GOOGLE = 'google',
+  OPENROUTER = 'openrouter',
+  MISTRAL = 'mistral',
+  OLLAMA = 'ollama'
+}
+
 export interface UserSettings {
+  apiKeys: {
+    [key in AIProvider]?: string;
+  };
+  ollamaBaseUrl?: string;
+  useSearchGrounding: boolean;
   live: {
     voice: string;
     model: string;
     quality: 'low' | 'standard' | 'high';
   };
   generation: {
+    provider: AIProvider;
     model: string;
   };
   analysis: {
+    provider: AIProvider;
     model: string;
   };
 }
@@ -82,6 +96,7 @@ export interface UserSettings {
 export interface AIModel {
   name: string;
   displayName: string;
+  provider: AIProvider;
   description?: string;
   supportedGenerationMethods?: string[];
 }

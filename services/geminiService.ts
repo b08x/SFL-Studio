@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 import { GoogleGenAI, Modality, Type } from "@google/genai";
-import { SFLField, SFLTenor, SFLMode, SFLAnalysis, AIModel } from "../types";
+import { SFLField, SFLTenor, SFLMode, SFLAnalysis, AIModel, AIProvider } from "../types";
 
 const getAi = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
@@ -32,11 +32,11 @@ const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: s
 
 export const getAvailableModels = async (): Promise<AIModel[]> => {
     const DEFAULTS: AIModel[] = [
-        { name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
-        { name: 'gemini-3-pro-preview', displayName: 'Gemini 3.0 Pro' },
-        { name: 'gemini-2.5-flash-native-audio-preview-09-2025', displayName: 'Gemini 2.5 Flash Live Audio' },
-        { name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro' },
-        { name: 'veo-3.1-fast-generate-preview', displayName: 'Veo 3.1 Fast' }
+        { name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', provider: AIProvider.GOOGLE },
+        { name: 'gemini-3-pro-preview', displayName: 'Gemini 3.0 Pro', provider: AIProvider.GOOGLE },
+        { name: 'gemini-2.5-flash-native-audio-preview-09-2025', displayName: 'Gemini 2.5 Flash Live Audio', provider: AIProvider.GOOGLE },
+        { name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', provider: AIProvider.GOOGLE },
+        { name: 'veo-3.1-fast-generate-preview', displayName: 'Veo 3.1 Fast', provider: AIProvider.GOOGLE }
     ];
 
     try {
@@ -50,6 +50,7 @@ export const getAvailableModels = async (): Promise<AIModel[]> => {
             return response.models.map((m: any) => ({
                 name: m.name.replace('models/', ''),
                 displayName: m.displayName,
+                provider: AIProvider.GOOGLE,
                 description: m.description,
                 supportedGenerationMethods: m.supportedGenerationMethods
             }));
