@@ -74,7 +74,10 @@ export enum AIProvider {
 
 export interface UserSettings {
   apiKeys: {
-    [key in AIProvider]?: string;
+    google?: string;
+    openrouter?: string;
+    mistral?: string;
+    ollama?: string; // Kept for consistency, though Ollama usually doesn't need a key
   };
   ollamaBaseUrl?: string;
   useSearchGrounding: boolean;
@@ -99,6 +102,7 @@ export interface AIModel {
   provider: AIProvider;
   description?: string;
   supportedGenerationMethods?: string[];
+  isVisionCapable?: boolean;
 }
 
 // --- Workflow & Lab Models ---

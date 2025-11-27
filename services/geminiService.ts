@@ -41,13 +41,24 @@ export const getAvailableModels = async (): Promise<AIModel[]> => {
 
     try {
         const ai = getAi();
-        // Attempt to list models. If this method doesn't exist on the client or fails auth,
-        // we catch the error and return defaults.
-        // @ts-ignore - The SDK types might not expose list() on the main client in all versions
+        // @ts-ignore
         const response = await ai.models.list();
+        const models = [];
         
-        if (response && response.models && response.models.length > 0) {
-            return response.models.map((m: any) => ({
+        // Handle if response is standard array container or iterable pager
+        // @ts-ignore
+        if (response.models && Array.isArray(response.models)) {
+            // @ts-ignore
+            models.push(...response.models);
+        } else {
+             // @ts-ignore
+             for await (const m of response) {
+                models.push(m);
+            }
+        }
+        
+        if (models.length > 0) {
+            return models.map((m: any) => ({
                 name: m.name.replace('models/', ''),
                 displayName: m.displayName,
                 provider: AIProvider.GOOGLE,
@@ -201,7 +212,12 @@ export const analyzePromptWithSFL = async (promptText: string, sfl: { field: SFL
     });
 
     if (response.text) {
-        return JSON.parse(response.text) as SFLAnalysis;
+        const parsed = JSON.parse(response.text);
+        // Ensure arrays exist
+        parsed.strengths = parsed.strengths || [];
+        parsed.weaknesses = parsed.weaknesses || [];
+        parsed.suggestions = parsed.suggestions || [];
+        return parsed as SFLAnalysis;
     }
     throw new Error("Analysis failed");
 };
@@ -253,7 +269,7 @@ export const connectLiveAssistant = async (
                         properties: {
                             category: { type: Type.STRING, enum: ['field', 'tenor', 'mode'] },
                             key: { type: Type.STRING, description: 'The specific property key to update (e.g., "affect", "domain")' },
-                            value: { type: 'STRING', description: 'The new value' }
+                            value: { type: Type.STRING, description: 'The new value' }
                         },
                         required: ['category', 'key', 'value']
                     }
@@ -300,11 +316,11 @@ export const connectLiveAssistant = async (
                         
                         // Send response back
                         session.sendToolResponse({
-                            functionResponses: {
+                            functionResponses: [{
                                 id: fc.id,
                                 name: fc.name,
                                 response: { result: "Success" } // Simplified response
-                            }
+                            }]
                         });
                     }
                 }

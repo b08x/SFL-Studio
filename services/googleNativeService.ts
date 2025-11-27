@@ -128,7 +128,7 @@ export const connectLiveAssistant = async (
                         properties: {
                             category: { type: Type.STRING, enum: ['field', 'tenor', 'mode'] },
                             key: { type: Type.STRING },
-                            value: { type: 'STRING' }
+                            value: { type: Type.STRING }
                         },
                         required: ['category', 'key', 'value']
                     }
@@ -171,11 +171,11 @@ export const connectLiveAssistant = async (
                     for (const fc of msg.toolCall.functionCalls) {
                         await onToolCall(fc.name, fc.args);
                         session.sendToolResponse({
-                            functionResponses: {
+                            functionResponses: [{
                                 id: fc.id,
                                 name: fc.name,
                                 response: { result: "Success" }
-                            }
+                            }]
                         });
                     }
                 }

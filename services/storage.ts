@@ -7,11 +7,12 @@ import { Prompt, Workflow, UserSettings, AIProvider } from '../types';
 const STORAGE_KEYS = {
   PROMPTS: 'sfl_prompts_v2',
   WORKFLOWS: 'sfl_workflows_v2',
-  SETTINGS: 'sfl_settings_v3' // Bumped version for new schema
+  SETTINGS: 'sfl_settings_v3.1' // Bumped for hybrid support
 };
 
 const DEFAULT_SETTINGS: UserSettings = {
     apiKeys: {},
+    ollamaBaseUrl: 'http://localhost:11434/v1',
     useSearchGrounding: false,
     live: {
         voice: 'Zephyr',
@@ -104,8 +105,15 @@ export const db = {
           const data = localStorage.getItem(STORAGE_KEYS.SETTINGS);
           if (data) {
               const parsed = JSON.parse(data);
-              // Migration helper for older versions
-              return { ...DEFAULT_SETTINGS, ...parsed, apiKeys: { ...DEFAULT_SETTINGS.apiKeys, ...parsed.apiKeys } };
+              // Deep merge default settings to ensure new keys exist
+              return { 
+                  ...DEFAULT_SETTINGS, 
+                  ...parsed, 
+                  apiKeys: { ...DEFAULT_SETTINGS.apiKeys, ...parsed.apiKeys },
+                  generation: { ...DEFAULT_SETTINGS.generation, ...parsed.generation },
+                  analysis: { ...DEFAULT_SETTINGS.analysis, ...parsed.analysis },
+                  live: { ...DEFAULT_SETTINGS.live, ...parsed.live }
+              };
           }
           return DEFAULT_SETTINGS;
       },
