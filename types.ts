@@ -124,6 +124,7 @@ export interface WorkflowTask {
     promptId?: string; // For generation
     code?: string; // For transformation (JS)
     targetKey?: string; // Where to store result in context
+    dataSourceId?: string; // ID of the task that provides input
     inputType?: 'text' | 'file' | 'audio' | 'video'; // For INPUT tasks
     inputValue?: string; // Raw text content
     fileName?: string; // For file inputs

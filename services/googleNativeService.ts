@@ -203,8 +203,8 @@ export const connectLiveAssistant = async (
                     }
                 }
             },
-            inputAudioTranscription: {},
-            outputAudioTranscription: {}
+            // Removed transcription config to improve connection stability and avoid potential network errors 
+            // if the model version or region has intermittent support.
         },
         callbacks: {
             onopen: () => callbacks.onStatusChange('connected'),
@@ -223,7 +223,7 @@ export const connectLiveAssistant = async (
                     callbacks.onInterrupted();
                 }
 
-                // Transcription (Input & Output)
+                // Transcription (Input & Output) - Keep handler logic if messages arrive, even if explicit config removed
                 if (msg.serverContent?.inputTranscription) {
                      callbacks.onTranscript('user', msg.serverContent.inputTranscription.text, true);
                 }

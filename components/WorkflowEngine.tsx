@@ -1,11 +1,10 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Workflow, WorkflowTask, TaskType, Prompt } from '../types';
-import { Play, Plus, X, Settings, CheckCircle, Circle, AlertCircle, Loader2, FileText, Code, Activity, User, GripHorizontal, Zap, Upload, Video, Mic, FileInput } from 'lucide-react';
+import { Play, Plus, X, Settings, CheckCircle, Circle, AlertCircle, Loader2, FileText, Code, Activity, User, GripHorizontal, Zap, Upload, Video, Mic, FileInput, ArrowRight } from 'lucide-react';
 import { db } from '../services/storage';
 
 interface WorkflowEngineProps {
@@ -87,7 +86,12 @@ const WorkflowEngine: React.FC<WorkflowEngineProps> = ({ workflow: initialWorkfl
     
     // Auto-connect if a task is selected
     if (selectedTaskId) {
-        newTask.dependencies.push(selectedTaskId);
+        // Validate connection before auto-connecting
+        const sourceTask = workflow.tasks.find(t => t.id === selectedTaskId);
+        if (sourceTask && type !== TaskType.INPUT) {
+            newTask.dependencies.push(selectedTaskId);
+            newTask.config.dataSourceId = selectedTaskId; // Auto-assign source
+        }
     }
 
     const updated = { ...workflow, tasks: [...workflow.tasks, newTask] };
@@ -100,7 +104,12 @@ const WorkflowEngine: React.FC<WorkflowEngineProps> = ({ workflow: initialWorkfl
           ...workflow,
           tasks: workflow.tasks.filter(t => t.id !== id).map(t => ({
               ...t,
-              dependencies: t.dependencies.filter(d => d !== id)
+              dependencies: t.dependencies.filter(d => d !== id),
+              config: {
+                  ...t.config,
+                  // Clear dataSourceId if the source was deleted
+                  dataSourceId: t.config.dataSourceId === id ? undefined : t.config.dataSourceId
+              }
           }))
       };
       saveWorkflow(updated);
@@ -159,21 +168,45 @@ const WorkflowEngine: React.FC<WorkflowEngineProps> = ({ workflow: initialWorkfl
       const targetTask = workflow.tasks.find(t => t.id === targetId);
       if (!targetTask) return;
 
+      // Validation: INPUT nodes cannot have incoming connections
+      if (targetTask.type === TaskType.INPUT) {
+          console.warn("Input nodes cannot act as targets.");
+          return;
+      }
+
       // Check if already connected
       if (targetTask.dependencies.includes(sourceId)) return;
 
       // Check for cycles (Basic BFS check could be added here, omitting for simplicity/performance in V2)
 
-      const updatedTasks = workflow.tasks.map(t => 
-          t.id === targetId ? { ...t, dependencies: [...t.dependencies, sourceId] } : t
-      );
+      const updatedTasks = workflow.tasks.map(t => {
+          if (t.id === targetId) {
+             const newDependencies = [...t.dependencies, sourceId];
+             // Auto-assign dataSourceId if empty and this is a consumer node
+             let newConfig = { ...t.config };
+             if (!newConfig.dataSourceId) {
+                 newConfig.dataSourceId = sourceId;
+             }
+             return { ...t, dependencies: newDependencies, config: newConfig };
+          }
+          return t;
+      });
       saveWorkflow({ ...workflow, tasks: updatedTasks });
   };
 
   const handleDisconnect = (sourceId: string, targetId: string) => {
-      const updatedTasks = workflow.tasks.map(t => 
-        t.id === targetId ? { ...t, dependencies: t.dependencies.filter(d => d !== sourceId) } : t
-      );
+      const updatedTasks = workflow.tasks.map(t => {
+          if (t.id === targetId) {
+              const newDependencies = t.dependencies.filter(d => d !== sourceId);
+              let newConfig = { ...t.config };
+              // Clear dataSourceId if it was the disconnected node
+              if (newConfig.dataSourceId === sourceId) {
+                  newConfig.dataSourceId = newDependencies.length > 0 ? newDependencies[0] : undefined;
+              }
+              return { ...t, dependencies: newDependencies, config: newConfig };
+          }
+          return t;
+      });
       saveWorkflow({ ...workflow, tasks: updatedTasks });
   };
 
@@ -286,15 +319,9 @@ const WorkflowEngine: React.FC<WorkflowEngineProps> = ({ workflow: initialWorkfl
                             
                             <div>
                                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Task Type</label>
-                                <select
-                                    className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm text-slate-200 focus:border-primary-500 outline-none appearance-none"
-                                    value={selectedTaskObj.type}
-                                    onChange={(e) => handleUpdateTask(selectedTaskId!, { type: e.target.value as TaskType })}
-                                >
-                                    {Object.values(TaskType).map(t => (
-                                        <option key={t} value={t}>{t}</option>
-                                    ))}
-                                </select>
+                                <div className="px-3 py-2 bg-slate-950 border border-slate-800 rounded text-sm text-slate-400 font-mono">
+                                    {selectedTaskObj.type}
+                                </div>
                             </div>
                         </div>
 
@@ -305,6 +332,35 @@ const WorkflowEngine: React.FC<WorkflowEngineProps> = ({ workflow: initialWorkfl
                             <h5 className="text-xs font-bold text-primary-400 uppercase tracking-wider flex items-center gap-2">
                                 <Zap className="w-3 h-3" /> Parameters
                             </h5>
+
+                            {/* COMMON: Input Selection for Consumer Nodes */}
+                            {(selectedTaskObj.type === TaskType.GENERATION || 
+                              selectedTaskObj.type === TaskType.TRANSFORMATION || 
+                              selectedTaskObj.type === TaskType.ANALYSIS) && (
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">
+                                        Input Data Source
+                                    </label>
+                                    {selectedTaskObj.dependencies.length > 0 ? (
+                                        <select
+                                            className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm text-slate-200 focus:border-primary-500 outline-none"
+                                            value={selectedTaskObj.config.dataSourceId || ''}
+                                            onChange={(e) => handleUpdateConfig(selectedTaskId!, 'dataSourceId', e.target.value)}
+                                        >
+                                            <option value="">-- Select Input --</option>
+                                            {selectedTaskObj.dependencies.map(depId => {
+                                                const dep = workflow.tasks.find(t => t.id === depId);
+                                                return <option key={depId} value={depId}>{dep?.name || depId}</option>
+                                            })}
+                                        </select>
+                                    ) : (
+                                        <div className="p-2 bg-amber-900/10 border border-amber-900/30 rounded text-xs text-amber-500 flex gap-2">
+                                            <AlertCircle className="w-4 h-4" />
+                                            <span>Connect a previous node to provide input.</span>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
 
                             <div>
                                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">
@@ -409,9 +465,18 @@ const WorkflowEngine: React.FC<WorkflowEngineProps> = ({ workflow: initialWorkfl
                                         className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs font-mono text-blue-300 focus:border-blue-500 outline-none resize-none h-40 leading-relaxed"
                                         value={selectedTaskObj.config.code || ''}
                                         onChange={(e) => handleUpdateConfig(selectedTaskId!, 'code', e.target.value)}
-                                        placeholder="// return context.data..."
+                                        placeholder="// return input.data..."
                                         spellCheck={false}
                                     />
+                                </div>
+                            )}
+
+                             {selectedTaskObj.type === TaskType.ANALYSIS && (
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Analysis Rules</label>
+                                    <div className="p-3 bg-slate-900 border border-slate-800 rounded text-xs text-slate-400">
+                                        <p>Standard SFL Analysis will be applied to the input text.</p>
+                                    </div>
                                 </div>
                             )}
                         </div>
@@ -539,12 +604,12 @@ const WorkflowEngine: React.FC<WorkflowEngineProps> = ({ workflow: initialWorkfl
                                 <g key={`${dep.id}-${task.id}`}>
                                     <path 
                                         d={d} 
-                                        stroke="#475569" 
-                                        strokeWidth="2"
+                                        stroke={task.config.dataSourceId === dep.id ? "#10b981" : "#475569"} 
+                                        strokeWidth={task.config.dataSourceId === dep.id ? "2.5" : "2"}
                                         fill="none"
                                         markerEnd="url(#arrowhead)"
+                                        className="transition-colors duration-300"
                                     />
-                                    {/* Invisible thick path for easier clicking if we added deletion */}
                                 </g>
                             );
                         });
@@ -582,19 +647,21 @@ const WorkflowEngine: React.FC<WorkflowEngineProps> = ({ workflow: initialWorkfl
                             }}
                             onMouseDown={(e) => handleNodeMouseDown(e, task.id)}
                         >
-                            {/* Input Handle (Left) */}
-                            <div 
-                                className="absolute -left-3 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center cursor-crosshair hover:scale-110 transition-transform"
-                                onMouseUp={(e) => {
-                                    e.stopPropagation();
-                                    if (connectingFromId) {
-                                        handleConnect(connectingFromId, task.id);
-                                        setConnectingFromId(null);
-                                    }
-                                }}
-                            >
-                                <div className={`w-3 h-3 rounded-full border-2 ${connectingFromId && connectingFromId !== task.id ? 'bg-primary-500 border-white animate-pulse' : 'bg-slate-900 border-slate-500'}`}></div>
-                            </div>
+                            {/* Input Handle (Left) - Only if not INPUT type */}
+                            {task.type !== TaskType.INPUT && (
+                                <div 
+                                    className="absolute -left-3 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center cursor-crosshair hover:scale-110 transition-transform"
+                                    onMouseUp={(e) => {
+                                        e.stopPropagation();
+                                        if (connectingFromId) {
+                                            handleConnect(connectingFromId, task.id);
+                                            setConnectingFromId(null);
+                                        }
+                                    }}
+                                >
+                                    <div className={`w-3 h-3 rounded-full border-2 ${connectingFromId && connectingFromId !== task.id ? 'bg-primary-500 border-white animate-pulse' : 'bg-slate-900 border-slate-500'}`}></div>
+                                </div>
+                            )}
 
                             {/* Node Content */}
                             <div className="p-3 h-full flex flex-col justify-between">
