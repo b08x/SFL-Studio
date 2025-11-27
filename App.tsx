@@ -3,43 +3,23 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 import React, { useState, useEffect, useRef } from 'react';
-import { Prompt, Workflow, SFLAnalysis, UserSettings } from './types';
+import { Prompt, Workflow, SFLAnalysis, UserSettings, TaskType } from './types';
 import { db } from './services/storage';
-import { generatePromptFromSFL, connectLiveAssistant, analyzePromptWithSFL, extractSFLFromContext } from './services/orchestrator';
+import { generatePromptFromSFL, analyzePromptWithSFL, extractSFLFromContext } from './services/orchestrator';
 import DiffViewer from './components/DiffViewer';
 import PromptWizard from './components/PromptWizard';
 import WorkflowEngine from './components/WorkflowEngine';
 import AnalysisPanel from './components/AnalysisPanel';
 import SettingsModal from './components/SettingsModal';
+import LiveAssistant from './components/LiveAssistant';
 import { SFLFieldSchema, SFLTenorSchema, SFLModeSchema } from './schemas';
 import { z } from 'zod';
 import { 
-  Terminal, Mic, Save, Layers, 
-  Settings, Box, Database, Cpu, Command, 
-  MicOff, Activity, Sparkles, FileText,
-  Upload, Download, ShieldCheck, Loader2, X, Wand2,
-  Menu, PanelRightOpen, PanelRight, ChevronRight, Play, Globe, History, LayoutTemplate, MoreHorizontal, User as UserIcon
+  Terminal, Save, Layers, 
+  Settings, Box, Activity, Sparkles, FileText,
+  Upload, Loader2, X, Wand2,
+  Menu, PanelRightOpen, ChevronRight, History, User as UserIcon
 } from 'lucide-react';
-
-// --- Helper for Raw PCM Decoding ---
-function decodeRawPCM(data: Uint8Array, ctx: AudioContext, sampleRate: number = 24000, numChannels: number = 1): AudioBuffer {
-  const byteLength = data.byteLength;
-  // Ensure even length for 16-bit samples
-  const alignedLength = byteLength - (byteLength % 2);
-  const dataInt16 = new Int16Array(data.buffer, data.byteOffset, alignedLength / 2);
-  
-  const frameCount = dataInt16.length / numChannels;
-  const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
-
-  for (let channel = 0; channel < numChannels; channel++) {
-    const channelData = buffer.getChannelData(channel);
-    for (let i = 0; i < frameCount; i++) {
-      // Convert int16 to float32 (-1.0 to 1.0)
-      channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
-    }
-  }
-  return buffer;
-}
 
 // --- Modal Wrapper ---
 const ModalShell = ({ children, onClose }: { children?: React.ReactNode, onClose: () => void }) => (
@@ -132,13 +112,6 @@ const App: React.FC = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isExtractingSFL, setIsExtractingSFL] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
-
-  // Live State
-  const [isLive, setIsLive] = useState(false);
-  const [liveStatus, setLiveStatus] = useState('disconnected');
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const audioQueueRef = useRef<AudioBuffer[]>([]);
-  const isPlayingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // --- Initialization ---
@@ -147,73 +120,6 @@ const App: React.FC = () => {
     setWorkflows(db.workflows.getAll());
     setSettings(db.settings.get());
   }, []);
-
-  // --- Audio Logic ---
-  const playNextAudio = async () => {
-    if (!audioContextRef.current || audioQueueRef.current.length === 0 || isPlayingRef.current) return;
-    isPlayingRef.current = true;
-    const buffer = audioQueueRef.current.shift()!;
-    const source = audioContextRef.current.createBufferSource();
-    source.buffer = buffer;
-    source.connect(audioContextRef.current.destination);
-    source.onended = () => { isPlayingRef.current = false; playNextAudio(); };
-    source.start();
-  };
-
-  const handleAudioData = async (base64: string) => {
-    if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-    }
-    const binaryString = atob(base64);
-    const len = binaryString.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
-    try {
-        // Fix: Use manual PCM decoding instead of native decodeAudioData which fails on raw PCM stream
-        const audioBuffer = decodeRawPCM(bytes, audioContextRef.current); 
-        audioQueueRef.current.push(audioBuffer);
-        playNextAudio();
-    } catch (e) { console.error("Audio decoding error:", e); }
-  };
-
-  const toggleLive = async () => {
-      if (isLive) {
-          setIsLive(false); setLiveStatus('disconnected'); window.location.reload(); 
-      } else {
-          try {
-              setLiveStatus('connecting');
-              const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-              const sessionPromise = connectLiveAssistant(
-                  { voiceName: settings.live.voice, model: settings.live.model },
-                  handleAudioData, 
-                  async (name, args) => {
-                      if (name === 'updateSFL' && currentPrompt) {
-                          handleUpdateSFL(args.category, args.key, args.value);
-                          return { success: true };
-                      }
-                      if (name === 'generate') { handleGenerate(); return { success: true }; }
-                  },
-                  setLiveStatus
-              );
-              // Ensure connection is established
-              await sessionPromise;
-              
-              setIsLive(true);
-              const audioCtx = new AudioContext({ sampleRate: 16000 });
-              const source = audioCtx.createMediaStreamSource(stream);
-              const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-              processor.onaudioprocess = (e) => {
-                  const inputData = e.inputBuffer.getChannelData(0);
-                  const pcmData = new Int16Array(inputData.length);
-                  for (let i = 0; i < inputData.length; i++) pcmData[i] = inputData[i] * 0x7fff;
-                  const base64 = btoa(String.fromCharCode(...new Uint8Array(pcmData.buffer)));
-                  sessionPromise.then(s => s.sendRealtimeInput({ media: { mimeType: "audio/pcm;rate=16000", data: base64 } }));
-              };
-              source.connect(processor);
-              processor.connect(audioCtx.destination);
-          } catch (e) { console.error(e); setLiveStatus('error'); }
-      }
-  };
 
   // --- Core Actions ---
 
@@ -316,6 +222,45 @@ const App: React.FC = () => {
       } catch (e) { console.error(e); } finally { setIsExtractingSFL(false); }
   };
 
+  // --- Live Assistant Handlers ---
+
+  const handleLiveToolCall = async (name: string, args: any) => {
+      console.log("Live Tool Call:", name, args);
+      
+      if (name === 'updateSFL') {
+          if (!currentPrompt) return "No active prompt found to update.";
+          handleUpdateSFL(args.category, args.key, args.value);
+          return `Updated ${args.category}.${args.key} to ${args.value}`;
+      }
+      
+      if (name === 'replacePromptContent') {
+          if (!currentPrompt) return "No active prompt.";
+          setCurrentPrompt({ ...currentPrompt, content: args.content });
+          return "Prompt content updated.";
+      }
+
+      if (name === 'createWorkflow') {
+          const newWf: Workflow = {
+              id: `wf-${Date.now()}`,
+              name: args.name || "AI Generated Workflow",
+              status: 'IDLE',
+              tasks: [
+                  { 
+                    id: 't1', type: TaskType.INPUT, name: 'Start', 
+                    config: { inputType: 'text' }, position: {x:100, y:100}, dependencies: []
+                  }
+              ],
+              logs: []
+          };
+          db.workflows.save(newWf);
+          setWorkflows(db.workflows.getAll());
+          setCurrentWorkflow(newWf);
+          setView('lab');
+          return "Workflow created and opened.";
+      }
+      return "Unknown tool";
+  };
+
   // --- Render ---
 
   return (
@@ -329,7 +274,6 @@ const App: React.FC = () => {
               </button>
               <h1 className="font-display font-bold text-slate-200 tracking-tight">SFL Studio</h1>
           </div>
-          {isLive && <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>}
       </div>
 
       {/* Main Sidebar (Desktop) */}
@@ -395,20 +339,6 @@ const App: React.FC = () => {
                     </span>
                  )}
              </div>
-
-             <div className="flex items-center gap-3">
-                 <button 
-                    onClick={toggleLive}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all ${
-                        isLive 
-                        ? 'bg-red-500/10 border-red-500/50 text-red-400 animate-pulse' 
-                        : 'bg-slate-900 border-slate-800 text-slate-500 hover:text-primary-400 hover:border-primary-500/50'
-                    }`}
-                 >
-                    {isLive ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
-                    <span className="text-[10px] font-bold uppercase tracking-wider">{liveStatus === 'connected' ? 'Live' : 'Voice'}</span>
-                 </button>
-             </div>
          </header>
 
          {/* Content Viewport */}
@@ -471,7 +401,7 @@ const App: React.FC = () => {
                             <div className="flex h-full">
                                 {[
                                     { id: 'edit', label: 'Editor', icon: Terminal },
-                                    { id: 'analysis', label: 'Analysis', icon: ShieldCheck },
+                                    { id: 'analysis', label: 'Analysis', icon: Activity },
                                     { id: 'history', label: 'History', icon: History }
                                 ].map(tab => (
                                     <button
@@ -527,7 +457,7 @@ const App: React.FC = () => {
                                         <AnalysisPanel analysis={analysis || currentPrompt.lastAnalysis!} />
                                     ) : (
                                         <div className="flex flex-col items-center justify-center h-64 text-slate-500">
-                                            <ShieldCheck className="w-12 h-12 mb-4 opacity-20" />
+                                            <Activity className="w-12 h-12 mb-4 opacity-20" />
                                             <p>No analysis generated yet.</p>
                                             <button onClick={handleAnalyze} className="mt-4 text-primary-400 hover:text-primary-300 text-sm font-bold">Run Analysis</button>
                                         </div>
@@ -564,7 +494,7 @@ const App: React.FC = () => {
                                     disabled={isAnalyzing}
                                     className="px-4 py-2 rounded-full hover:bg-slate-700 text-slate-300 text-xs font-bold flex items-center gap-2 transition-colors disabled:opacity-50"
                                 >
-                                    {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+                                    {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />}
                                     Analyze
                                 </button>
                                 <div className="w-px h-4 bg-slate-700"></div>
@@ -625,7 +555,7 @@ const App: React.FC = () => {
                             {/* Tenor */}
                             <div className="space-y-3">
                                 <h4 className="text-[10px] font-bold text-primary-500 flex items-center gap-2 uppercase tracking-widest">
-                                    <Database className="w-3 h-3" /> Tenor (Roles)
+                                    <Box className="w-3 h-3" /> Tenor (Roles)
                                 </h4>
                                 <div className="space-y-3 pl-2 border-l border-slate-800">
                                     <InputField label="Sender" value={currentPrompt.sfl.tenor.senderRole} onChange={(v: string) => handleUpdateSFL('tenor', 'senderRole', v)} error={validationErrors['tenor.senderRole']} />
@@ -638,7 +568,7 @@ const App: React.FC = () => {
                             {/* Mode */}
                             <div className="space-y-3">
                                 <h4 className="text-[10px] font-bold text-emerald-500 flex items-center gap-2 uppercase tracking-widest">
-                                    <Cpu className="w-3 h-3" /> Mode (Channel)
+                                    <Box className="w-3 h-3" /> Mode (Channel)
                                 </h4>
                                 <div className="space-y-3 pl-2 border-l border-slate-800">
                                     <SelectField label="Channel" value={currentPrompt.sfl.mode.channel} onChange={(v: string) => handleUpdateSFL('mode', 'channel', v)} options={['Written', 'Spoken', 'Visual']} />
@@ -685,7 +615,7 @@ const App: React.FC = () => {
                                     }}
                                     className="h-40 rounded-xl border border-dashed border-slate-700 hover:border-primary-500 hover:bg-slate-900/50 flex flex-col items-center justify-center gap-3 text-slate-500 hover:text-primary-400 transition-all group"
                                 >
-                                    <div className="p-3 bg-slate-900 rounded-full group-hover:scale-110 transition-transform"><PlusIcon /></div>
+                                    <div className="p-3 bg-slate-900 rounded-full group-hover:scale-110 transition-transform"><Wand2 className="w-6 h-6" /></div>
                                     <span className="font-bold">Create Workflow</span>
                                 </button>
                                 {workflows.map(w => (
@@ -708,6 +638,20 @@ const App: React.FC = () => {
 
          </div>
       </main>
+
+      {/* Floating Live Assistant */}
+      <LiveAssistant 
+          settings={settings}
+          context={{
+              view,
+              dataSummary: currentPrompt 
+                ? `Prompt: "${currentPrompt.title}". SFL: ${currentPrompt.sfl.field.domain}` 
+                : currentWorkflow 
+                    ? `Workflow: "${currentWorkflow.name}". Tasks: ${currentWorkflow.tasks.length}` 
+                    : 'Dashboard View'
+          }}
+          onToolCall={handleLiveToolCall}
+      />
 
       {/* Modals */}
       {modal === 'wizard' && (
@@ -743,9 +687,5 @@ const App: React.FC = () => {
     </div>
   );
 };
-
-const PlusIcon = () => (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-)
 
 export default App;

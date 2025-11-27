@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
-import { GoogleGenAI, Modality, Type } from "@google/genai";
+import { GoogleGenAI, Modality, Type, LiveServerMessage } from "@google/genai";
 import { db } from "./storage";
 
 const getAi = () => new GoogleGenAI({ apiKey: db.settings.get().apiKeys.google || process.env.API_KEY });
@@ -109,11 +109,17 @@ export const extractSFLFromContext = async (file: File) => {
 
 // --- Live API (Voice Assistant) ---
 
+export interface LiveConnectionCallbacks {
+    onAudioData: (base64: string) => void;
+    onTranscript: (role: 'user' | 'model', text: string, isFinal: boolean) => void;
+    onToolCall: (toolName: string, args: any) => Promise<any>;
+    onStatusChange: (status: 'connecting' | 'connected' | 'disconnected' | 'error') => void;
+    onInterrupted: () => void;
+}
+
 export const connectLiveAssistant = async (
-    config: { voiceName: string, model: string },
-    onAudioData: (base64: string) => void,
-    onToolCall: (toolName: string, args: any) => Promise<any>,
-    onStatusChange: (status: string) => void
+    config: { voiceName: string, model: string, systemInstruction: string },
+    callbacks: LiveConnectionCallbacks
 ) => {
     const ai = getAi();
     
@@ -134,9 +140,27 @@ export const connectLiveAssistant = async (
                     }
                 },
                 {
-                    name: 'generate',
-                    description: 'Triggers prompt generation.',
-                    parameters: { type: Type.OBJECT, properties: {} }
+                    name: 'replacePromptContent',
+                    description: 'Completely replaces the current prompt content with new text.',
+                    parameters: {
+                        type: Type.OBJECT,
+                        properties: {
+                            content: { type: Type.STRING, description: 'The new prompt text.' }
+                        },
+                        required: ['content']
+                    }
+                },
+                {
+                    name: 'createWorkflow',
+                    description: 'Creates a new workflow in the Lab.',
+                    parameters: {
+                        type: Type.OBJECT,
+                        properties: {
+                            name: { type: Type.STRING },
+                            description: { type: Type.STRING }
+                        },
+                        required: ['name']
+                    }
                 }
             ]
         }
@@ -147,36 +171,63 @@ export const connectLiveAssistant = async (
         config: {
             tools: tools,
             responseModalities: [Modality.AUDIO],
-            systemInstruction: "You are 'SFL-OS', a helpful AI coding assistant. Be concise.",
+            systemInstruction: config.systemInstruction,
             speechConfig: {
                 voiceConfig: {
                     prebuiltVoiceConfig: {
                         voiceName: config.voiceName
                     }
                 }
-            }
+            },
+            inputAudioTranscription: {},
+            outputAudioTranscription: {}
         },
         callbacks: {
-            onopen: () => onStatusChange('connected'),
-            onclose: () => onStatusChange('disconnected'),
+            onopen: () => callbacks.onStatusChange('connected'),
+            onclose: () => callbacks.onStatusChange('disconnected'),
             onerror: (e) => {
-                console.error(e);
-                onStatusChange('error');
+                console.error("Live API Error:", e);
+                callbacks.onStatusChange('error');
             },
-            onmessage: async (msg) => {
+            onmessage: async (msg: LiveServerMessage) => {
+                // Audio Output
                 const audioData = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-                if (audioData) onAudioData(audioData);
+                if (audioData) callbacks.onAudioData(audioData);
 
+                // Handle Interruption
+                if (msg.serverContent?.interrupted) {
+                    callbacks.onInterrupted();
+                }
+
+                // Transcription (Input & Output)
+                if (msg.serverContent?.inputTranscription) {
+                     callbacks.onTranscript('user', msg.serverContent.inputTranscription.text, true);
+                }
+                if (msg.serverContent?.outputTranscription) {
+                     callbacks.onTranscript('model', msg.serverContent.outputTranscription.text, true);
+                }
+
+                // Tool Execution
                 if (msg.toolCall) {
                     for (const fc of msg.toolCall.functionCalls) {
-                        await onToolCall(fc.name, fc.args);
-                        session.sendToolResponse({
-                            functionResponses: [{
-                                id: fc.id,
-                                name: fc.name,
-                                response: { result: "Success" }
-                            }]
-                        });
+                        try {
+                            const result = await callbacks.onToolCall(fc.name, fc.args);
+                            session.sendToolResponse({
+                                functionResponses: [{
+                                    id: fc.id,
+                                    name: fc.name,
+                                    response: { result: result || "Success" }
+                                }]
+                            });
+                        } catch (e: any) {
+                             session.sendToolResponse({
+                                functionResponses: [{
+                                    id: fc.id,
+                                    name: fc.name,
+                                    response: { error: e.message || "Failed" }
+                                }]
+                            });
+                        }
                     }
                 }
             }
