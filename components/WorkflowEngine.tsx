@@ -4,7 +4,7 @@
 */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Workflow, WorkflowTask, TaskType, Prompt } from '../types';
-import { Play, Plus, X, Settings, CheckCircle, Circle, AlertCircle, Loader2, FileText, Code, Activity, User, GripHorizontal, Zap, Upload, Video, Mic, FileInput, ArrowRight } from 'lucide-react';
+import { Play, Plus, X, Settings, CheckCircle, Circle, AlertCircle, Loader2, FileText, Code, Activity, User, GripHorizontal, Zap, Upload, Video, Mic, FileInput, ArrowRight, FileOutput, Globe } from 'lucide-react';
 import { db } from '../services/storage';
 
 interface WorkflowEngineProps {
@@ -75,10 +75,14 @@ const WorkflowEngine: React.FC<WorkflowEngineProps> = ({ workflow: initialWorkfl
     const newTask: WorkflowTask = {
         id: `task-${Date.now()}`,
         type,
-        name: type === TaskType.INPUT ? 'Input Source' : `New ${type.toLowerCase().replace('_', ' ')}`,
+        name: type === TaskType.INPUT ? 'Input Source' : 
+              type === TaskType.OUTPUT ? 'Final Output' : 
+              `New ${type.toLowerCase().replace('_', ' ')}`,
         config: {
             targetKey: `output_${workflow.tasks.length + 1}`,
-            inputType: 'text'
+            inputType: 'text',
+            useGrounding: false,
+            outputFormat: 'markdown'
         },
         position: { x: centerX, y: centerY },
         dependencies: []
@@ -88,7 +92,8 @@ const WorkflowEngine: React.FC<WorkflowEngineProps> = ({ workflow: initialWorkfl
     if (selectedTaskId) {
         // Validate connection before auto-connecting
         const sourceTask = workflow.tasks.find(t => t.id === selectedTaskId);
-        if (sourceTask && type !== TaskType.INPUT) {
+        // Can only auto-connect if source is not an OUTPUT node
+        if (sourceTask && sourceTask.type !== TaskType.OUTPUT && type !== TaskType.INPUT) {
             newTask.dependencies.push(selectedTaskId);
             newTask.config.dataSourceId = selectedTaskId; // Auto-assign source
         }
@@ -165,19 +170,25 @@ const WorkflowEngine: React.FC<WorkflowEngineProps> = ({ workflow: initialWorkfl
   const handleConnect = (sourceId: string, targetId: string) => {
       if (sourceId === targetId) return; // No self-loops
       
+      const sourceTask = workflow.tasks.find(t => t.id === sourceId);
       const targetTask = workflow.tasks.find(t => t.id === targetId);
-      if (!targetTask) return;
+      
+      if (!sourceTask || !targetTask) return;
 
-      // Validation: INPUT nodes cannot have incoming connections
+      // Validation 1: INPUT nodes cannot be targets
       if (targetTask.type === TaskType.INPUT) {
           console.warn("Input nodes cannot act as targets.");
           return;
       }
 
+      // Validation 2: OUTPUT nodes cannot be sources
+      if (sourceTask.type === TaskType.OUTPUT) {
+          console.warn("Output nodes cannot act as sources.");
+          return;
+      }
+
       // Check if already connected
       if (targetTask.dependencies.includes(sourceId)) return;
-
-      // Check for cycles (Basic BFS check could be added here, omitting for simplicity/performance in V2)
 
       const updatedTasks = workflow.tasks.map(t => {
           if (t.id === targetId) {
@@ -336,7 +347,8 @@ const WorkflowEngine: React.FC<WorkflowEngineProps> = ({ workflow: initialWorkfl
                             {/* COMMON: Input Selection for Consumer Nodes */}
                             {(selectedTaskObj.type === TaskType.GENERATION || 
                               selectedTaskObj.type === TaskType.TRANSFORMATION || 
-                              selectedTaskObj.type === TaskType.ANALYSIS) && (
+                              selectedTaskObj.type === TaskType.ANALYSIS ||
+                              selectedTaskObj.type === TaskType.OUTPUT) && (
                                 <div>
                                     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">
                                         Input Data Source
@@ -362,19 +374,60 @@ const WorkflowEngine: React.FC<WorkflowEngineProps> = ({ workflow: initialWorkfl
                                 </div>
                             )}
 
-                            <div>
-                                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">
-                                    Output Variable
-                                </label>
-                                <div className="flex items-center gap-2">
-                                    <span className="text-slate-600 font-mono text-xs">$</span>
-                                    <input 
-                                        className="flex-1 bg-slate-950 border border-slate-800 rounded px-3 py-2 text-xs font-mono text-emerald-400 focus:border-emerald-500 outline-none"
-                                        value={selectedTaskObj.config.targetKey || ''}
-                                        onChange={(e) => handleUpdateConfig(selectedTaskId!, 'targetKey', e.target.value)}
-                                    />
+                             {/* COMMON: Output Variable for non-output nodes */}
+                             {selectedTaskObj.type !== TaskType.OUTPUT && (
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">
+                                        Output Variable
+                                    </label>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-slate-600 font-mono text-xs">$</span>
+                                        <input 
+                                            className="flex-1 bg-slate-950 border border-slate-800 rounded px-3 py-2 text-xs font-mono text-emerald-400 focus:border-emerald-500 outline-none"
+                                            value={selectedTaskObj.config.targetKey || ''}
+                                            onChange={(e) => handleUpdateConfig(selectedTaskId!, 'targetKey', e.target.value)}
+                                        />
+                                    </div>
                                 </div>
-                            </div>
+                            )}
+
+                            {/* GROUNDING: For Generation and Analysis */}
+                            {(selectedTaskObj.type === TaskType.GENERATION || selectedTaskObj.type === TaskType.ANALYSIS) && (
+                                <div className="flex items-center justify-between p-3 bg-slate-900 border border-slate-800 rounded-lg">
+                                    <div className="flex items-center gap-2">
+                                        <Globe className="w-4 h-4 text-blue-400" />
+                                        <div className="flex flex-col">
+                                            <span className="text-xs font-bold text-slate-300">Grounding</span>
+                                            <span className="text-[9px] text-slate-500">Google Search</span>
+                                        </div>
+                                    </div>
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                        <input 
+                                            type="checkbox" 
+                                            className="sr-only peer"
+                                            checked={selectedTaskObj.config.useGrounding || false}
+                                            onChange={(e) => handleUpdateConfig(selectedTaskId!, 'useGrounding', e.target.checked)}
+                                        />
+                                        <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                                    </label>
+                                </div>
+                            )}
+
+                            {/* OUTPUT CONFIG */}
+                            {selectedTaskObj.type === TaskType.OUTPUT && (
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Export Format</label>
+                                    <select
+                                        className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm text-slate-200 focus:border-primary-500 outline-none"
+                                        value={selectedTaskObj.config.outputFormat || 'text'}
+                                        onChange={(e) => handleUpdateConfig(selectedTaskId!, 'outputFormat', e.target.value)}
+                                    >
+                                        <option value="text">Plain Text</option>
+                                        <option value="markdown">Markdown</option>
+                                        <option value="json">JSON</option>
+                                    </select>
+                                </div>
+                            )}
 
                             {/* INPUT CONFIG */}
                             {selectedTaskObj.type === TaskType.INPUT && (
@@ -524,6 +577,13 @@ const WorkflowEngine: React.FC<WorkflowEngineProps> = ({ workflow: initialWorkfl
                                     <span className="text-[10px] text-slate-500">Quality Guard</span>
                                 </div>
                             </button>
+                            <button onClick={() => handleAddTask(TaskType.OUTPUT)} className="flex items-center gap-3 px-3 py-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-fuchsia-500/50 rounded-lg text-xs text-slate-300 transition-all group">
+                                <div className="p-1.5 bg-fuchsia-500/10 rounded group-hover:bg-fuchsia-500/20 text-fuchsia-400"><FileOutput className="w-4 h-4" /></div>
+                                <div className="text-left">
+                                    <span className="block font-bold">Final Output</span>
+                                    <span className="text-[10px] text-slate-500">Export / Format</span>
+                                </div>
+                            </button>
                         </div>
                     </div>
                     
@@ -670,11 +730,13 @@ const WorkflowEngine: React.FC<WorkflowEngineProps> = ({ workflow: initialWorkfl
                                         task.type === TaskType.INPUT ? 'bg-cyan-950/50 border-cyan-500/30 text-cyan-300' :
                                         task.type === TaskType.GENERATION ? 'bg-indigo-950/50 border-indigo-500/30 text-indigo-300' : 
                                         task.type === TaskType.TRANSFORMATION ? 'bg-blue-950/50 border-blue-500/30 text-blue-300' :
+                                        task.type === TaskType.OUTPUT ? 'bg-fuchsia-950/50 border-fuchsia-500/30 text-fuchsia-300' :
                                         'bg-amber-950/50 border-amber-500/30 text-amber-300'
                                     }`}>
                                         {task.type === TaskType.INPUT ? 'INPUT' : 
                                          task.type === TaskType.GENERATION ? 'GEN' : 
-                                         task.type === TaskType.TRANSFORMATION ? 'CODE' : 'TEST'}
+                                         task.type === TaskType.TRANSFORMATION ? 'CODE' : 
+                                         task.type === TaskType.OUTPUT ? 'EXPORT' : 'TEST'}
                                     </span>
                                     {status === 'RUNNING' && <Loader2 className="w-3.5 h-3.5 animate-spin text-primary-400" />}
                                     {status === 'COMPLETED' && <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />}
@@ -683,19 +745,22 @@ const WorkflowEngine: React.FC<WorkflowEngineProps> = ({ workflow: initialWorkfl
                                 
                                 <div className="flex items-center gap-2">
                                     <h4 className="text-xs font-bold text-slate-200 truncate select-none">{task.name}</h4>
+                                    {task.config.useGrounding && <Globe className="w-3 h-3 text-blue-400" />}
                                 </div>
                             </div>
 
-                            {/* Output Handle (Right) */}
-                            <div 
-                                className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center cursor-crosshair hover:scale-110 transition-transform"
-                                onMouseDown={(e) => {
-                                    e.stopPropagation();
-                                    setConnectingFromId(task.id);
-                                }}
-                            >
-                                <div className="w-3 h-3 bg-slate-800 border-2 border-slate-400 rounded-full hover:bg-primary-500 hover:border-white transition-colors"></div>
-                            </div>
+                            {/* Output Handle (Right) - Only if not OUTPUT type */}
+                            {task.type !== TaskType.OUTPUT && (
+                                <div 
+                                    className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center cursor-crosshair hover:scale-110 transition-transform"
+                                    onMouseDown={(e) => {
+                                        e.stopPropagation();
+                                        setConnectingFromId(task.id);
+                                    }}
+                                >
+                                    <div className="w-3 h-3 bg-slate-800 border-2 border-slate-400 rounded-full hover:bg-primary-500 hover:border-white transition-colors"></div>
+                                </div>
+                            )}
                         </div>
                     );
                 })}

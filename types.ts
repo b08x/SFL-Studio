@@ -112,7 +112,8 @@ export enum TaskType {
   GENERATION = 'GENERATION',
   TRANSFORMATION = 'TRANSFORMATION',
   ANALYSIS = 'ANALYSIS',
-  HUMAN_REVIEW = 'HUMAN_REVIEW'
+  HUMAN_REVIEW = 'HUMAN_REVIEW',
+  OUTPUT = 'OUTPUT'
 }
 
 export interface WorkflowTask {
@@ -129,6 +130,8 @@ export interface WorkflowTask {
     inputValue?: string; // Raw text content
     fileName?: string; // For file inputs
     fileType?: string; // Mime type
+    useGrounding?: boolean; // For Generation/Analysis: Enable Google Search Grounding
+    outputFormat?: 'markdown' | 'json' | 'text'; // For OUTPUT tasks
   };
   position: { x: number; y: number }; // For canvas visualization
   dependencies: string[]; // IDs of tasks that must finish first
