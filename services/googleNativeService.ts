@@ -123,20 +123,44 @@ export const connectLiveAssistant = async (
 ) => {
     const ai = getAi();
     
+    // Improved Tool Definitions for LA-FIX-006 (Granular tools with ENUMs)
     const tools = [
         {
             functionDeclarations: [
                 {
-                    name: 'updateSFL',
-                    description: 'Updates the SFL parameters (Field, Tenor, or Mode).',
+                    name: 'updateSFLField',
+                    description: 'Updates Field parameters (Subject matter).',
                     parameters: {
                         type: Type.OBJECT,
                         properties: {
-                            category: { type: Type.STRING, enum: ['field', 'tenor', 'mode'] },
-                            key: { type: Type.STRING },
-                            value: { type: Type.STRING }
+                            key: { type: Type.STRING, enum: ['domain', 'process'] },
+                            value: { type: Type.STRING, description: "The new value." }
                         },
-                        required: ['category', 'key', 'value']
+                        required: ['key', 'value']
+                    }
+                },
+                {
+                    name: 'updateSFLTenor',
+                    description: 'Updates Tenor parameters (Participants/Relationship).',
+                    parameters: {
+                        type: Type.OBJECT,
+                        properties: {
+                            key: { type: Type.STRING, enum: ['senderRole', 'receiverRole', 'powerStatus', 'affect'] },
+                            value: { type: Type.STRING, description: "For powerStatus: 'Equal', 'High-to-Low', 'Low-to-High'. For affect: 'Neutral', 'Enthusiastic', 'Critical', 'Sarcastic', 'Professional'. Else string." }
+                        },
+                        required: ['key', 'value']
+                    }
+                },
+                {
+                    name: 'updateSFLMode',
+                    description: 'Updates Mode parameters (Channel/Format).',
+                    parameters: {
+                        type: Type.OBJECT,
+                        properties: {
+                            key: { type: Type.STRING, enum: ['channel', 'medium', 'rhetoricalMode'] },
+                            value: { type: Type.STRING, description: "For channel: 'Written', 'Spoken', 'Visual'. For rhetoricalMode: 'Didactic', 'Persuasive', 'Descriptive', 'Narrative'. Else string." }
+                        },
+                        required: ['key', 'value']
                     }
                 },
                 {

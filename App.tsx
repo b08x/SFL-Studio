@@ -21,6 +21,29 @@ import {
   Menu, PanelRightOpen, ChevronRight, History, User as UserIcon
 } from 'lucide-react';
 
+// --- Helpers ---
+const normalizeSFLKey = (category: string, key: string) => {
+    const c = category.toLowerCase();
+    const k = key.toLowerCase();
+    
+    if (c === 'field') {
+        if (k === 'subject' || k === 'topic') return 'domain';
+        if (k === 'action') return 'process';
+    }
+    if (c === 'tenor') {
+        if (k === 'sender' || k === 'senderrole') return 'senderRole';
+        if (k === 'receiver' || k === 'receiverrole') return 'receiverRole';
+        if (k === 'power' || k === 'powerstatus') return 'powerStatus';
+        if (k === 'tone' || k === 'affect') return 'affect';
+    }
+    if (c === 'mode') {
+        if (k === 'channel' || k === 'type') return 'channel';
+        if (k === 'medium' || k === 'format') return 'medium';
+        if (k === 'rhetoric' || k === 'rhetorical' || k === 'rhetoricalmode') return 'rhetoricalMode';
+    }
+    return key;
+};
+
 // --- Modal Wrapper ---
 const ModalShell = ({ children, onClose }: { children?: React.ReactNode, onClose: () => void }) => (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200 p-4">
@@ -145,11 +168,43 @@ const App: React.FC = () => {
     return newPrompt;
   };
 
-  const handleUpdateSFL = (category: string, key: string, value: string) => {
-      if (!currentPrompt) return;
+  const handleUpdateSFL = (category: string, key: string, value: string): boolean => {
+      if (!currentPrompt) return false;
       
       const cat = category.toLowerCase() as 'field' | 'tenor' | 'mode';
-      if (!['field', 'tenor', 'mode'].includes(cat)) return;
+      if (!['field', 'tenor', 'mode'].includes(cat)) return false;
+
+      // Validate Key Existence in Schema
+      let isValidKey = false;
+      if (cat === 'field' && key in SFLFieldSchema.shape) isValidKey = true;
+      if (cat === 'tenor' && key in SFLTenorSchema.shape) isValidKey = true;
+      if (cat === 'mode' && key in SFLModeSchema.shape) isValidKey = true;
+
+      if (!isValidKey) {
+          console.warn(`Attempted to update invalid SFL key: ${cat}.${key}`);
+          return false;
+      }
+
+      // LA-FIX-005: Validate Value BEFORE State Update
+      const errorKey = `${cat}.${key}`;
+      try {
+        if (cat === 'field') SFLFieldSchema.shape[key as keyof typeof SFLFieldSchema.shape].parse(value);
+        else if (cat === 'tenor') SFLTenorSchema.shape[key as keyof typeof SFLTenorSchema.shape].parse(value);
+        else if (cat === 'mode') SFLModeSchema.shape[key as keyof typeof SFLModeSchema.shape].parse(value);
+
+        // Clear previous error if valid
+        setValidationErrors(prev => {
+            const newErrors = { ...prev };
+            delete newErrors[errorKey];
+            return newErrors;
+        });
+      } catch (err: any) {
+          if (err instanceof z.ZodError && err.issues && err.issues.length > 0) {
+              setValidationErrors(prev => ({ ...prev, [errorKey]: err.issues[0].message }));
+              // Do NOT update state if value is invalid
+              return false;
+          }
+      }
 
       // Immutable update pattern to ensure React re-renders
       const updated: Prompt = {
@@ -166,24 +221,7 @@ const App: React.FC = () => {
       
       setCurrentPrompt(updated);
       db.prompts.save(updated); // Persist immediately for voice commands
-
-      // Zod Validation
-      const errorKey = `${cat}.${key}`;
-      try {
-        if (cat === 'field') SFLFieldSchema.shape[key as keyof typeof SFLFieldSchema.shape].parse(value);
-        else if (cat === 'tenor') SFLTenorSchema.shape[key as keyof typeof SFLTenorSchema.shape].parse(value);
-        else if (cat === 'mode') SFLModeSchema.shape[key as keyof typeof SFLModeSchema.shape].parse(value);
-
-        setValidationErrors(prev => {
-            const newErrors = { ...prev };
-            delete newErrors[errorKey];
-            return newErrors;
-        });
-      } catch (err: any) {
-          if (err instanceof z.ZodError && err.issues && err.issues.length > 0) {
-              setValidationErrors(prev => ({ ...prev, [errorKey]: err.issues[0].message }));
-          }
-      }
+      return true;
   };
   
   const handleSave = () => {
@@ -242,10 +280,34 @@ const App: React.FC = () => {
   const handleLiveToolCall = async (name: string, args: any) => {
       console.log("Live Tool Call:", name, args);
       
-      if (name === 'updateSFL') {
+      const applyUpdate = (category: string, rawKey: string, value: string) => {
           if (!currentPrompt) return "No active prompt found to update.";
-          handleUpdateSFL(args.category, args.key, args.value);
-          return `Updated ${args.category}.${args.key} to ${args.value}`;
+          
+          // LA-FIX-004: Normalize key before update
+          const normalizedKey = normalizeSFLKey(category, rawKey);
+          
+          const success = handleUpdateSFL(category, normalizedKey, value);
+          
+          if (success) {
+            return `Updated ${category}.${normalizedKey} to ${value}`;
+          } else {
+            return `Error: Invalid parameter or value for '${rawKey}' in category '${category}'. Please check valid options.`;
+          }
+      };
+
+      if (name === 'updateSFL') {
+          return applyUpdate(args.category, args.key, args.value);
+      }
+      
+      // LA-FIX-006: Support granular tools
+      if (name === 'updateSFLField') {
+          return applyUpdate('field', args.key, args.value);
+      }
+      if (name === 'updateSFLTenor') {
+          return applyUpdate('tenor', args.key, args.value);
+      }
+      if (name === 'updateSFLMode') {
+          return applyUpdate('mode', args.key, args.value);
       }
       
       if (name === 'replacePromptContent') {
